@@ -1,0 +1,3 @@
+# Keeps this prototype out of the AshCoin app's dependency tree and lockfile.
+onlyBuiltDependencies:
+  - esbuild

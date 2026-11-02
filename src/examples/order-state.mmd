@@ -1,0 +1,20 @@
+---
+title: Order lifecycle
+---
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Submitted: customer pays
+  state Fulfilment {
+    Submitted --> Picking: warehouse accepts
+    Picking --> Packed: items scanned
+    Packed --> Shipped: courier collects
+  }
+  state Exceptions {
+    Refunded
+    Failed
+  }
+  Submitted --> Failed: payment declined
+  Shipped --> Delivered: signature captured
+  Delivered --> Refunded: return approved
+  Delivered --> [*]
+  Failed --> [*]

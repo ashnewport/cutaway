@@ -1,0 +1,34 @@
+@startuml
+title Uploading a file with a presigned URL
+
+box "Interface"
+  actor Person
+  participant "Upload dialog" as Dialog
+end box
+
+box "Application"
+  participant "Upload API" as Api
+  participant "Virus scan function" as Scan
+end box
+
+box "Infrastructure"
+  database "Postgres metadata DB" as Db
+  collections "S3 uploads bucket" as Bucket
+  queue "SQS scan queue" as Queue
+end box
+
+Person -> Dialog : Drops a file
+note right : The dialog never holds AWS credentials.
+Dialog -> Api : Requests upload slot
+note right : Only filename, type and size are sent.
+Api -> Db : Inserts pending row
+Api --> Dialog : Returns presigned URL
+note right : The URL is signed, scoped to one object and expires quickly.
+Dialog -> Bucket : PUT file bytes
+note right : The bytes skip the app servers entirely.
+Bucket -> Queue : Emits object created event
+Queue -> Scan : Delivers scan job
+Scan -> Bucket : Reads object
+Scan -> Db : Marks file clean
+Api --> Dialog : Reports upload ready
+@enduml

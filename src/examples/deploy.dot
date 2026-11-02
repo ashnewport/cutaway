@@ -1,0 +1,37 @@
+digraph "Shipping a change" {
+  subgraph cluster_people {
+    label = "People";
+    dev [label="Developer"];
+    review [label="Pull request page"];
+  }
+  subgraph cluster_pipeline {
+    label = "Build pipeline";
+    ci [label="Test job"];
+    build [label="Image build job"];
+    deployer [label="Deploy job"];
+  }
+  subgraph cluster_runtime {
+    label = "Runtime";
+    registry [label="Image storage", shape=folder];
+    canary [label="Canary containers"];
+    prod [label="Production containers"];
+    lb [label="Load balancer"];
+  }
+
+  // @step A developer opens a pull request.
+  dev -> review [label="Opens PR"];
+  // @step Opening it starts the tests.
+  review -> ci [label="Triggers checks"];
+  // @step Passing tests produce a versioned image.
+  ci -> build [label="Tests pass"];
+  // @step The image goes to storage.
+  build -> registry [label="Pushes image", style=bold];
+  // @step The deploy job rolls out to a small canary first.
+  deployer -> canary [label="Rolls out 5%"];
+  // @step The load balancer shifts a little traffic.
+  lb -> canary [label="Sends 5% traffic", style=dashed];
+  // @step Healthy metrics promote the release.
+  canary -> prod [label="Promotes release", style=bold];
+  // @step All traffic now reaches the new version.
+  lb -> prod [label="Sends 100% traffic", style=bold];
+}

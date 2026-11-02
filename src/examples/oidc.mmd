@@ -1,0 +1,90 @@
+---
+title: OIDC sign-in, seen on three layers
+---
+sequenceDiagram
+  box What the user sees
+    actor User
+    participant Browser as Browser tab
+    participant Consent as Login and consent page
+  end
+  box Protocol and data
+    participant BFF as Client backend
+    participant AS as Authorization server
+    participant API as Resource API
+  end
+  box Infrastructure
+    participant Net as Public internet
+    participant ALB as Application load balancer
+    participant Sessions as Redis session store
+    participant Directory as User directory DB
+    participant JWKS as JWKS signing keys
+    participant Orders as Postgres orders DB
+  end
+
+  %% @zone vpc "VPC": ALB, Sessions, Directory, JWKS, Orders
+  %% @zone public in vpc "Public subnet": ALB
+  %% @zone private in vpc "Private subnet": Sessions, JWKS
+  %% @zone datasub in vpc "Data subnet": Directory, Orders
+  %% @kind Net internet
+
+  User->>Browser: Clicks Sign in
+  Note over User,Browser: Nothing about OIDC is visible yet. To the user, this is one click.
+
+  Browser->>Net: GET /login over HTTPS
+  Note over Browser,Net: The request leaves the device and crosses the public internet.
+  Net->>ALB: Reaches the public subnet
+  Note over Net,ALB: The load balancer terminates TLS. Only it is exposed to the internet.
+  ALB->>BFF: Forwards to client backend
+  Note over ALB,BFF: Back up a layer: infrastructure has delivered the request to the app.
+
+  BFF->>Sessions: Stores state, nonce, PKCE verifier
+  Note over BFF,Sessions: These secrets stay server-side. They later prove the response belongs to this login.
+  BFF-->>Browser: 302 to /authorize with code challenge
+  Note over BFF,Browser: The redirect carries only the hash of the PKCE verifier, never the verifier.
+
+  Browser->>Consent: Opens the login page
+  Note over Browser,Consent: The user is now on the identity provider's domain. The client app never sees the password.
+  User->>Consent: Types password and MFA code
+  Note over User,Consent: Credentials go only to the identity provider.
+  Consent->>AS: Submits credentials
+  Note over Consent,AS: The hosted page posts to the authorization server.
+  AS->>Directory: Verifies password hash
+  Note over AS,Directory: Down to the data subnet. Only the hash is compared.
+  Directory-->>AS: Returns user record
+  Note over Directory,AS: The record supplies the subject and claims for the ID token.
+
+  AS-->>Browser: 302 to /callback with code and state
+  Note over AS,Browser: The authorization code is short-lived and useless without the PKCE verifier.
+  Browser->>BFF: GET /callback with code and state
+  Note over Browser,BFF: Still only a redirect from the user's point of view.
+
+  BFF->>Sessions: Loads state and verifier
+  Note over BFF,Sessions: The state must match, which blocks login CSRF.
+  Sessions-->>BFF: Returns PKCE verifier
+  Note over Sessions,BFF: The verifier comes back for the token exchange.
+  BFF->>AS: POST /token with code and verifier
+  Note over BFF,AS: This back-channel call never touches the browser.
+  AS->>JWKS: Signs tokens with private key
+  Note over AS,JWKS: The signing key stays in the private subnet.
+  AS-->>BFF: Returns ID token and access token
+  Note over AS,BFF: The ID token says who signed in. The access token says what the app may do.
+
+  BFF->>Sessions: Saves tokens against session id
+  Note over BFF,Sessions: Tokens stay on the server. This is why the pattern is called a backend for frontend.
+  BFF-->>Browser: Sets HttpOnly session cookie
+  Note over BFF,Browser: The browser only gets an opaque cookie that scripts cannot read.
+  Browser->>User: Shows signed-in dashboard
+  Note over Browser,User: The user is in. Everything after this is an ordinary API call.
+
+  Browser->>BFF: GET /orders with cookie
+  Note over Browser,BFF: The cookie identifies the session, and the backend swaps it for the access token.
+  BFF->>API: GET /orders with bearer token
+  Note over BFF,API: The API trusts the token, not the caller.
+  API->>JWKS: Fetches public key
+  Note over API,JWKS: The API verifies the signature locally, so it can cache this key.
+  API->>Orders: SELECT orders for subject
+  Note over API,Orders: The token's subject claim limits which rows come back.
+  Orders-->>API: Returns rows
+  Note over Orders,API: Authorization happened before the query ran.
+  API-xBrowser: 403 forbidden for admin report
+  Note over API,Browser: A token without the right scope is refused. Authentication is not authorization.

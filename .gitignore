@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+.vite
+
+# Test output
+test-results
+playwright-report
+coverage
+
+# Local files
+.DS_Store
+.env
+.env.*
+!.env.example
+*.local
+*.log

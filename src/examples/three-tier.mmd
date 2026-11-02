@@ -1,0 +1,99 @@
+---
+title: Placing an order, from tap to disk
+---
+flowchart LR
+  subgraph ui["UI interaction"]
+    shopper([Shopper])
+    cart[Cart page]
+    payment[Payment form]
+    done[Order confirmed screen]
+  end
+
+  subgraph app["Web app data flow"]
+    action[Form action]
+    guard[Session guard]
+    schema[Zod validation]
+    orders[Order service]
+    outbox[Outbox events]
+    ssr[Server render]
+  end
+
+  subgraph infra["Infrastructure"]
+    internet((Public internet))
+    dns[Route 53 DNS]
+    cdn[CloudFront CDN]
+    subgraph vpc["VPC 10.0.0.0/16"]
+      subgraph public["Public subnet"]
+        igw[Internet gateway]
+        waf[WAF rules]
+        alb[Application load balancer]
+      end
+      subgraph private["Private subnet"]
+        containers[App containers]
+        sessions[Redis session cache]
+        nat[NAT gateway]
+      end
+      subgraph data["Data subnet"]
+        primary[(Postgres primary)]
+        replica[(Postgres replica)]
+      end
+    end
+    idp[Cognito identity provider]
+    receipts[(S3 receipts bucket)]
+    kms[KMS keys]
+  end
+
+  %% @kind containers service
+  %% @detail alb HTTPS on 443
+  %% @detail primary Multi-AZ writer
+  %% @detail receipts Private, encrypted
+
+  %% @step The shopper reviews their cart and moves on to payment.
+  shopper -->|Taps Checkout| cart
+  %% @step The cart page hands over to the payment form.
+  cart -->|Opens payment| payment
+  %% @step Submitting the form is a single user action. Everything below serves this one moment.
+  payment ==>|Taps Pay now| action
+
+  %% @step Inside the app, the form action checks who is asking before reading any input.
+  action -->|Reads session cookie| guard
+  %% @step The request body is validated against a schema before it reaches business logic.
+  guard -->|Passes valid session| schema
+  %% @step Validated data reaches the order service as a typed object.
+  schema -->|Sends order payload| orders
+  %% @step The order and its events are written in one transaction, so neither can be lost.
+  orders -.->|Writes order events| outbox
+  %% @step The service returns a result and the server renders the next screen.
+  orders -->|Returns order id| ssr
+
+  %% @step Now the same request as the network sees it. It starts with a name lookup.
+  internet -->|Resolves shop.example| dns
+  %% @step The CDN serves static assets and forwards dynamic requests to the origin.
+  internet ==>|HTTPS request| cdn
+  %% @step Traffic enters the VPC through the internet gateway.
+  cdn ==>|Forwards to origin| igw
+  %% @step The WAF filters hostile traffic before it reaches anything that matters.
+  igw -->|Routes to public subnet| waf
+  %% @step Clean traffic reaches the load balancer, which terminates TLS.
+  waf -->|Allows request| alb
+  %% @step The load balancer picks a healthy container in the private subnet.
+  alb ==>|Forwards to port 3000| containers
+  %% @step The container looks up the session in Redis, avoiding a trip to the identity provider.
+  containers -->|Gets session key| sessions
+  %% @step If the session is stale, the container reaches out through NAT to refresh it.
+  containers -.->|Refreshes tokens| nat
+  %% @step NAT gives private containers one-way access to the identity provider.
+  nat -.->|Calls token endpoint| idp
+  %% @step The order is written to the primary database inside the data subnet.
+  containers ==>|INSERT order| primary
+  %% @step Writes replicate to the standby for reads and failover.
+  primary -.->|Streams WAL| replica
+  %% @step The receipt goes to S3, encrypted with a key from KMS.
+  containers -->|PUT receipt| receipts
+  %% @step S3 asks KMS for a data key to encrypt the object.
+  receipts -.->|Requests data key| kms
+
+  %% @step The confirmation renders and travels back up to the shopper.
+  ssr -->|Sends HTML response| done
+  %% @step The shopper sees the order number. Done.
+  done -->|Shows order number| shopper

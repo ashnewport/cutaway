@@ -1,0 +1,29 @@
+---
+title: Marketplace domain model
+---
+classDiagram
+  namespace Trading {
+    class Listing {
+      +String title
+      +Decimal price
+      +expire()
+    }
+    class Trade {
+      +Decimal amount
+    }
+  }
+  namespace Accounts {
+    class User {
+      +String email
+      +approve()
+    }
+    class Wallet {
+      +Decimal balance
+      +debit()
+      +credit()
+    }
+  }
+  User "1" --> "1" Wallet : owns
+  User "1" --> "*" Listing : sells
+  Listing "1" --> "0..1" Trade : becomes
+  Trade ..> Wallet : moves funds
